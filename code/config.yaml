@@ -1,0 +1,132 @@
+# Web 出海 Agent 配置 (v0.3: 国产 LLM + HN + Stack Exchange + DuckDuckGo)
+# 每次跑管线前修改这个文件，定义本轮关注的垂直与种子
+
+# ---------- 本轮目标垂直 (1-3 个) ----------
+verticals:
+  - name: solo_lawyer
+    description: "独立执业律师 / 小型律所"
+    keywords_extra: [contract review, client intake, billing, deposition]
+    # Stack Exchange 站点 (不带 .stackexchange.com 后缀)
+    # 完整列表: https://stackexchange.com/sites
+    # 已验证存在: law, workplace, money, writers, productivity
+    se_sites: [law, workplace, money]
+
+  - name: etsy_seller
+    description: "Etsy / 独立站手作卖家"
+    # 更具体的 Etsy 痛点关键词（基于 r/Etsy r/EtsySellers 高频抱怨主题）
+    keywords_extra:
+      - Etsy fees
+      - Etsy algorithm
+      - Etsy listing not showing
+      - Etsy copycat
+      - Etsy review removal
+      - Etsy SEO
+      - Etsy ads ROI
+      - shipping label
+      - product photo
+      - customer message
+    # ecommerce / freelancing 站点不存在，已删
+    se_sites: [workplace, photo, money]
+
+# ---------- 通用抱怨触发词 ----------
+pain_keywords:
+  - "I wish there was"
+  - "why is there no"
+  - "I hate that"
+  - "tired of"
+  - "spend hours"
+  - "manually"
+  - "annoying that"
+  - "frustrating"
+  - "wish I could"
+  - "would pay for"
+  - "would be nice if"
+  - "missing feature"
+
+# ---------- 数据通道配置 ----------
+
+# Reddit 直抓 (已废弃, reddit.com 全面 403, 用 DDG 反查替代)
+reddit:
+  posts_per_sub_top: 100
+  posts_per_sub_hot: 50
+  time_filter: month
+  min_score: 5
+  min_comments: 3
+  top_comments_per_post: 10
+
+# Hacker News (Algolia API, 完全免费)
+hn:
+  hits_per_query: 30
+  days_back: 180
+  min_points: 3
+  fetch_comments: true
+
+# Stack Exchange (免费 300 req/day 无需 key)
+stackexchange:
+  pagesize: 20
+  days_back: 365
+  min_score: 2
+
+# DuckDuckGo 反查 (完全免费, 无需 key, 替代 Brave Search)
+ddg:
+  results_per_query: 15
+  max_queries_per_vertical: 24  # 每垂直消耗 N 次查询（提高以覆盖更多 seed × site 组合）
+  region: wt-wt  # worldwide
+
+# ---------- LLM 配置 (多 provider 抽象) ----------
+llm:
+  # 当前使用的 provider，从下面 providers 字典里选
+  # 推荐: sensenova (便宜 + 速度快) 或 glm (质量稳定)
+  provider: sensenova
+
+  # 各 provider 的细节配置（OpenAI 兼容 vs Anthropic 原生）
+  providers:
+    sensenova:
+      base_url: https://token.sensenova.cn/v1
+      model: sensenova-6.7-flash-lite
+      api_key_env: SENSENOVA_API_KEY
+      currency: CNY
+      # 注意: sensenova-6.7-flash-lite 是 reasoning 模型，思考链占额外 token
+      # 价格 / 百万 token (CNY 元) — 请按官网最新价更新
+      price_in: 0.5
+      price_out: 1.0
+
+    glm:
+      base_url: https://open.bigmodel.cn/api/paas/v4
+      model: glm-4-flash             # 也可换成 glm-4.5-flash / glm-4.6
+      api_key_env: GLM_API_KEY
+      currency: CNY
+      price_in: 0.5
+      price_out: 1.0
+
+    anthropic:
+      # Claude 走原生 SDK (不是 OpenAI 兼容)
+      base_url: null
+      model: claude-haiku-4-5-20251001
+      api_key_env: ANTHROPIC_API_KEY
+      currency: USD
+      # Haiku 4.5 价格 / 百万 token (USD)
+      price_in: 1.0
+      price_out: 5.0
+
+  # 单次 LLM 调用 max_tokens。reasoning 模型(SenseNova 6.7)需要给足思考预算，
+  # 否则会卡在 finish_reason=length 拿不到 content。建议:
+  #   - sensenova-6.7-flash-lite (reasoning): 3000+
+  #   - glm-4-flash / claude-haiku (非 reasoning): 2000 够用
+  max_tokens_per_call: 3500
+  # 单次 run 的 LLM 预算上限。单位跟随选中 provider 的 currency
+  # SenseNova: 30 元 ≈ 处理 1000+ 条原文
+  # Claude:    单位 USD，建议 5
+  batch_budget: 30.0
+
+# ---------- 输出 ----------
+output:
+  db_path: ../data/signals.db
+  report_dir: ../data/reports
+
+# ---------- 报告聚类参数 ----------
+report:
+  # cosine distance 上限：超过此值不合并
+  # 当前 TF-IDF 用 char_wb ngram (兼容中英短句)，相似度普遍偏高
+  # 0.40 = 严格（合并明显同主题）, 0.55 = 推荐（合并语义近的）, 0.70 = 宽（容易过合）
+  cluster_threshold: 0.75

@@ -1,0 +1,11 @@
+requests>=2.31.0
+python-dotenv>=1.0.0
+pyyaml>=6.0
+ddgs>=9.0.0                # DuckDuckGo 免费搜索（替代 Brave Search）
+openai>=1.40.0             # SenseNova / GLM / DeepSeek 等 OpenAI 兼容 provider
+anthropic>=0.40.0          # Claude (可选, 仅当 provider=anthropic 时使用)
+scikit-learn>=1.3.0        # TF-IDF + 聚类 (Module 3)
+numpy>=1.24.0              # scikit-learn 依赖
+# 后续启用以下依赖（按需）：
+# firecrawl-py>=0.0.16   # G2/Capterra 抓取
+# pytrends>=4.9.0        # Google Trends 反挖
