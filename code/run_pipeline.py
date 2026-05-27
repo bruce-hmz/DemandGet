@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import requests
 import yaml
@@ -972,9 +972,186 @@ def _cluster_signals_llm(tasks: List[str], cfg: dict) -> List[int]:
     return labels
 
 
+def _ddg_search_count(query: str, max_results: int = 5) -> Tuple[int, List[dict]]:
+    """用 DDG 搜索，返回 (估算结果数, 前N条结果列表)。"""
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        try:
+            from duckduckgo_search import DDGS
+        except ImportError:
+            return 0, []
+
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=max_results, safesearch="off"))
+        # DDG 不直接返回总数，用结果数粗估：有结果 ≈ 有市场
+        count = len(results)
+        return count, results
+    except Exception as e:
+        log.debug(f"DDG 搜索失败 '{query[:40]}': {e}")
+        return 0, []
+
+
+def scan_competitors(cluster_summary: str, top_quotes: List[str]) -> dict:
+    """自动竞品扫描：用 DDG 搜 "[痛点] tool/app/SaaS"，返回竞品信息。
+
+    Returns:
+        {
+            "competitor_count": int,    # 估算竞品数量 (0-5+)
+            "competitors": [str],       # 竞品名称列表
+            "maturity": str,            # "none" / "early" / "growing" / "saturated"
+            "search_query": str,        # 实际搜索词
+        }
+    """
+    import time
+
+    # 从 cluster summary 和 top quotes 提取核心关键词
+    # 取 summary 的前 60 字符作为搜索基础
+    base = cluster_summary[:60].strip()
+
+    # 搜两轮：一轮找工具，一轮找替代品
+    queries = [
+        f'"{base}" tool OR app OR SaaS',
+        f'"{base}" alternative OR competitor',
+    ]
+
+    all_results = []
+    for q in queries:
+        _, results = _ddg_search_count(q, max_results=5)
+        all_results.extend(results)
+        time.sleep(1)  # 礼貌限速
+
+    # 从结果里提取竞品名（标题里含 tool/app/SaaS/alternative 的）
+    competitor_names = []
+    tool_keywords = {'tool', 'app', 'saas', 'software', 'platform', 'alternative',
+                     'service', 'solution', 'app', 'extension', 'plugin'}
+    for hit in all_results:
+        title = (hit.get("title") or "").lower()
+        body = (hit.get("body") or "").lower()
+        combined = title + " " + body
+        # 如果标题/摘要里有工具类关键词，算一个竞品
+        if any(kw in combined for kw in tool_keywords):
+            name = hit.get("title", "").split(" - ")[0].split(" | ")[0].strip()
+            if name and len(name) < 60:
+                competitor_names.append(name)
+
+    # 去重
+    competitor_names = list(dict.fromkeys(competitor_names))[:10]
+    count = len(competitor_names)
+
+    # 判断成熟度
+    if count == 0:
+        maturity = "none"
+    elif count <= 2:
+        maturity = "early"
+    elif count <= 5:
+        maturity = "growing"
+    else:
+        maturity = "saturated"
+
+    return {
+        "competitor_count": count,
+        "competitors": competitor_names,
+        "maturity": maturity,
+        "search_query": queries[0],
+    }
+
+
+def estimate_tam(cluster_summary: str, user_roles: List[str]) -> dict:
+    """TAM 估算：用 DDG 搜索结果数 + 用户角色推算市场规模。
+
+    Returns:
+        {
+            "tam_score": int,        # 1-10 分 (10=巨大市场)
+            "search_volume": str,    # "high" / "medium" / "low"
+            "evidence": str,         # 估算依据
+        }
+    """
+    import time
+
+    base = cluster_summary[:60].strip()
+
+    # 用 DDG 搜索结果数作为市场关注度代理指标
+    queries = [
+        f'"{base}"',  # 精确匹配，看有多少人讨论这个话题
+    ]
+
+    result_count, results = _ddg_search_count(queries[0], max_results=10)
+    time.sleep(1)
+
+    # 从搜索结果里提取信号
+    # 结果多 = 市场关注度高
+    if result_count >= 8:
+        volume = "high"
+        tam = 8
+    elif result_count >= 4:
+        volume = "medium"
+        tam = 5
+    elif result_count >= 1:
+        volume = "low"
+        tam = 3
+    else:
+        volume = "none"
+        tam = 1
+
+    # 有专业角色（lawyer, developer 等）加分，说明是专业市场
+    pro_roles = {'lawyer', 'attorney', 'developer', 'engineer', 'doctor',
+                 'accountant', 'designer', 'marketer', 'founder', 'ceo'}
+    role_set = set(r.lower() for r in user_roles)
+    if role_set & pro_roles:
+        tam = min(10, tam + 2)  # 专业市场付费意愿更高
+
+    evidence = f"DDG 搜索返回 {result_count} 条结果，用户角色: {', '.join(user_roles[:3])}"
+
+    return {
+        "tam_score": tam,
+        "search_volume": volume,
+        "evidence": evidence,
+    }
+
+
+def _verdict(score: float, competitor_count: int, tam_score: int,
+             pay_ratio: float, avg_pain: float) -> str:
+    """综合判断：GO / MAYBE / SKIP。
+
+    逻辑：
+    - GO: 高分 + 竞品少 + TAM 大 + 有付费信号
+    - MAYBE: 有潜力但某个维度有短板
+    - SKIP: 竞品饱和 或 TAM 太小 或 无付费意愿
+    """
+    # 一票否决
+    if competitor_count >= 5:
+        return "SKIP"  # 竞品饱和
+    if tam_score <= 2:
+        return "SKIP"  # 市场太小
+    if pay_ratio == 0 and avg_pain < 4.0:
+        return "SKIP"  # 无付费 + 痛感不够
+
+    # GO 条件
+    go_signals = 0
+    if score >= 40:
+        go_signals += 1
+    if competitor_count <= 2:
+        go_signals += 1
+    if tam_score >= 5:
+        go_signals += 1
+    if pay_ratio >= 0.15:
+        go_signals += 1
+    if avg_pain >= 3.5:
+        go_signals += 1
+
+    if go_signals >= 4:
+        return "GO"
+    elif go_signals >= 2:
+        return "MAYBE"
+    else:
+        return "SKIP"
+
+
 def _score_cluster(cnt: int, avg_pain: float, pay_ratio: float,
                    ai_ratio: float, competitor_count: int = 0) -> float:
-    """SOP §7 多维打分公式（competitor_count 暂时 0，待 Brave 反查实装）"""
+    """SOP §7 多维打分公式"""
     import math
     gap = 5 - min(5, competitor_count)
     return (
@@ -1051,7 +1228,7 @@ def gen_weekly_report(conn: sqlite3.Connection, report_dir: str,
     for row, label in zip(rows, labels):
         clusters[label].append(row)
 
-    # 计算每个 cluster 的统计 + 分数
+    # 计算每个 cluster 的统计 + 初步分数
     cluster_summaries = []
     for label, sigs in clusters.items():
         cnt = len(sigs)
@@ -1085,28 +1262,86 @@ def gen_weekly_report(conn: sqlite3.Connection, report_dir: str,
             "ai_yes": ai_yes, "ai_partial": ai_partial, "summary": summary_task,
             "roles": top_roles, "urls": urls, "channels": channels,
             "sample_quote": sample_quote, "score": score,
+            # 占位，后面填
+            "competitor_count": 0, "competitors": [], "maturity": "unknown",
+            "tam_score": 0, "tam_volume": "unknown", "tam_evidence": "",
+            "verdict": "MAYBE",
         })
 
     cluster_summaries.sort(key=lambda c: -c["score"])
+
+    # ---------- 自动竞品扫描 + TAM 估算（只扫 top 20，控制 DDG 查询量）----------
+    SCAN_TOP_N = 20
+    top_clusters = cluster_summaries[:SCAN_TOP_N]
+    log.info(f"开始竞品扫描 + TAM 估算 (top {len(top_clusters)} clusters)...")
+
+    for i, c in enumerate(top_clusters):
+        # 提取该 cluster 的 top quotes 用于搜索
+        top_quotes = [s[8][:100] for s in list(clusters.values())[i][:3] if s[8]]
+
+        try:
+            comp = scan_competitors(c["summary"], top_quotes)
+            c["competitor_count"] = comp["competitor_count"]
+            c["competitors"] = comp["competitors"]
+            c["maturity"] = comp["maturity"]
+        except Exception as e:
+            log.warning(f"竞品扫描失败 cluster#{i}: {e}")
+
+        try:
+            role_names = [r[0] for r in c["roles"]]
+            tam = estimate_tam(c["summary"], role_names)
+            c["tam_score"] = tam["tam_score"]
+            c["tam_volume"] = tam["search_volume"]
+            c["tam_evidence"] = tam["evidence"]
+        except Exception as e:
+            log.warning(f"TAM 估算失败 cluster#{i}: {e}")
+
+        # 重新打分（加入真实竞品数据）
+        c["score"] = _score_cluster(
+            c["cnt"], c["avg_pain"], c["pay_ratio"],
+            (c["ai_yes"] + 0.5 * c["ai_partial"]) / max(1, c["cnt"]),
+            c["competitor_count"],
+        )
+
+        # 综合判断
+        c["verdict"] = _verdict(
+            c["score"], c["competitor_count"], c["tam_score"],
+            c["pay_ratio"], c["avg_pain"],
+        )
+
+        if (i + 1) % 5 == 0:
+            log.info(f"  扫描进度 {i+1}/{len(top_clusters)}")
+
+    # 重新排序
+    cluster_summaries.sort(key=lambda c: -c["score"])
     top_n = min(20, len(cluster_summaries))
+
+    # 统计 verdict 分布
+    verdict_counts = defaultdict(int)
+    for c in top_clusters:
+        verdict_counts[c["verdict"]] += 1
 
     # 写报告
     lines = [
         f"# Web 出海周报 {today}",
         "",
-        f"> v0.2 聚类版（TF-IDF + AgglomerativeClustering + 多维打分）",
+        f"> v0.4 自动验证版（聚类 + 竞品扫描 + TAM 估算 + GO/MAYBE/SKIP）",
         f"> 总信号: {len(rows)} | 聚类数: {len(clusters)} | 展示 Top {top_n}",
-        f"> 评分: 频率(2×log) + 痛感(2) + 付费信号(4×ratio×10) + AI 适配(1.5×ratio×5) + 竞品空缺(2)",
+        f"> 结论分布: GO={verdict_counts.get('GO',0)} MAYBE={verdict_counts.get('MAYBE',0)} SKIP={verdict_counts.get('SKIP',0)}",
         "",
     ]
 
     for i, c in enumerate(cluster_summaries[:top_n], 1):
-        lines.append(f"## #{i}  {c['summary']}")
+        verdict_icon = {"GO": "🟢", "MAYBE": "🟡", "SKIP": "🔴"}.get(c["verdict"], "⚪")
+        lines.append(f"## #{i} {verdict_icon} [{c['verdict']}] {c['summary']}")
         lines.append("")
         lines.append(f"- **综合分: {c['score']:.1f}** | 聚类信号数: **{c['cnt']}** | "
                      f"平均痛感: **{c['avg_pain']:.1f}/5**")
         lines.append(f"- 付费信号: **{c['pay_count']}/{c['cnt']}** ({c['pay_ratio']*100:.0f}%) "
                      f"| AI 可解: yes={c['ai_yes']} partial={c['ai_partial']}")
+        lines.append(f"- 竞品: **{c['competitor_count']} 个** ({c['maturity']})"
+                     + (f" — {', '.join(c['competitors'][:3])}" if c["competitors"] else ""))
+        lines.append(f"- TAM: **{c['tam_score']}/10** ({c['tam_volume']}) — {c['tam_evidence']}")
         lines.append(f"- 来源通道: {', '.join(c['channels'])}")
         roles_str = ", ".join(f"{r}({n})" for r, n in c["roles"])
         lines.append(f"- 用户身份 Top3: {roles_str}")
@@ -1128,6 +1363,7 @@ def gen_weekly_report(conn: sqlite3.Connection, report_dir: str,
     for r in rows:
         ch_counts[r[6]] += 1
     lines.append(f"- 通道分布: {dict(ch_counts)}")
+    lines.append(f"- 结论: GO={verdict_counts.get('GO',0)} | MAYBE={verdict_counts.get('MAYBE',0)} | SKIP={verdict_counts.get('SKIP',0)}")
 
     report_path.write_text("\n".join(lines), encoding="utf-8")
     log.info(f"报告已写入: {report_path}")
