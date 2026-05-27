@@ -100,7 +100,7 @@
 
 ## 3. Agent 角色与系统提示词
 
-把下面这段作为 `D:\docs\智控平台\web-chuhai-agent\prompts\system.md`，调用 agent 时载入。
+把下面这段作为 `DemandGet/prompts/system.md`，调用 agent 时载入。
 
 ```markdown
 你是一个出海需求发现的执行 agent。你的唯一任务是：从真实网络文本中抓取并归纳"用户抱怨"和"愿望表达"，输出结构化候选信号，绝不发明信号。

@@ -28,7 +28,7 @@ web-chuhai-agent/
 ### 1. 装依赖
 
 ```bash
-cd D:/docs/智控平台/web-chuhai-agent/code
+cd DemandGet/code
 python -m venv .venv
 .venv\Scripts\activate          # Windows
 pip install -r requirements.txt
@@ -107,7 +107,7 @@ python run_pipeline.py --channel ddg      # 只跑 DuckDuckGo (反查 Reddit/Quo
   "mcpServers": {
     "filesystem": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:/docs/智控平台/web-chuhai-agent"]
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/DemandGet"]
     },
     "brave-search": {
       "command": "npx",
