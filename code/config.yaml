@@ -26,7 +26,7 @@ verticals:
       - product photo
       - customer message
     # ecommerce / freelancing 站点不存在，已删
-    se_sites: [workplace, photo, money]
+    se_sites: [diy, workplace, money]
 
 # ---------- 通用抱怨触发词 ----------
 pain_keywords:
@@ -70,7 +70,7 @@ stackexchange:
 # DuckDuckGo 反查 (完全免费, 无需 key, 替代 Brave Search)
 ddg:
   results_per_query: 15
-  max_queries_per_vertical: 24  # 每垂直消耗 N 次查询（提高以覆盖更多 seed × site 组合）
+  max_queries_per_vertical: 36  # 每垂直消耗 N 次查询（覆盖 reddit + ph + trustpilot + g2 + twitter）
   region: wt-wt  # worldwide
 
 # ---------- LLM 配置 (多 provider 抽象) ----------

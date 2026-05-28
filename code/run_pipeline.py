@@ -487,6 +487,14 @@ DDG_SITE_TEMPLATES = [
     ('site:quora.com', 'is there a tool'),
     ('site:quora.com', 'how do I automate'),
     ('site:indiehackers.com', 'looking for tool'),
+    ('site:producthunt.com', 'I wish'),
+    ('site:producthunt.com', 'needs'),
+    ('site:trustpilot.com', 'terrible'),
+    ('site:trustpilot.com', 'waste of money'),
+    ('site:g2.com', 'disappointed'),
+    ('site:g2.com', 'switched from'),
+    ('site:twitter.com', 'frustrated with'),
+    ('site:twitter.com', 'why is there no'),
 ]
 
 
@@ -839,10 +847,11 @@ def _cluster_signals_tfidf(tasks: List[str], distance_threshold: float = 0.95):
     # 中英混合短句：用 char ngram 让中文也有特征，不用 stop_words 避免零向量
     vectorizer = TfidfVectorizer(
         analyzer="char_wb",
-        ngram_range=(2, 4),
-        max_features=2000,
+        ngram_range=(2, 5),
+        max_features=3000,
         lowercase=True,
         min_df=1,
+        sublinear_tf=True,
     )
     X = vectorizer.fit_transform(tasks_clean)
 
@@ -972,6 +981,119 @@ def _cluster_signals_llm(tasks: List[str], cfg: dict) -> List[int]:
     return labels
 
 
+CLUSTER_SUMMARY_PROMPT = """下面是 {n} 个用户痛点 cluster，每个有编号和 top 3 的 implied_task。
+请为每个 cluster 生成一句 10 词内的英文主题摘要，精确概括核心痛点。
+
+【输出 schema, 严格 JSON】
+{{"summaries": ["cluster 0 的摘要", "cluster 1 的摘要", ...]}}
+
+【输入 clusters】
+{clusters_text}
+
+输出 JSON:"""
+
+
+def _generate_cluster_summaries(cluster_tasks: dict, cfg: dict) -> dict:
+    """用 LLM 批量生成聚类摘要。输入 {cluster_id: [task1, task2, task3]}，输出 {cluster_id: summary}。"""
+    if not cluster_tasks:
+        return {}
+
+    clusters_text = ""
+    for cid, tasks in sorted(cluster_tasks.items()):
+        top3 = tasks[:3]
+        tasks_str = " | ".join(top3)
+        clusters_text += f"\ncluster {cid}: {tasks_str}"
+
+    prompt = CLUSTER_SUMMARY_PROMPT.format(
+        n=len(cluster_tasks),
+        clusters_text=clusters_text,
+    )
+
+    try:
+        provider_type, client, p_cfg = _make_llm_client(cfg)
+        resp_text, _, _ = _llm_call(provider_type, client, p_cfg, prompt, cfg.get("llm", {}).get("max_tokens_per_call", 3500))
+        # 提取 JSON
+        match = re.search(r'\{[\s\S]*"summaries"[\s\S]*\}', resp_text)
+        if match:
+            data = json.loads(match.group())
+            result = {}
+            for i, s in enumerate(data.get("summaries", [])):
+                if i < len(cluster_tasks):
+                    cid = sorted(cluster_tasks.keys())[i]
+                    result[cid] = s.strip()[:80]
+            return result
+    except Exception as e:
+        log.warning(f"LLM 聚类摘要生成失败: {e}")
+    return {}
+
+
+VALIDATION_KIT_PROMPT = """You are a product validation expert. Below are {n} GO-level demand signal clusters.
+Generate $50 ad test materials for each cluster.
+
+For EACH cluster, output:
+1. Landing page hero copy (3 variants: pain-driven, solution-driven, identity-driven)
+2. Google Ads: 3 titles (max 30 chars each) + 2 descriptions (max 90 chars each)
+3. Reddit Ad: 50-80 words, user voice, NOT salesy
+
+Output ONLY valid JSON array, no markdown, no explanation:
+[{{"cluster_id": 0, "landing_page": {{"variant_a": "...", "variant_b": "...", "variant_c": "..."}}, "google_ads": {{"titles": ["t1","t2","t3"], "desc": ["d1","d2"]}}, "reddit_ad": "..."}}]
+
+Rules: All English. Be specific with numbers and scenarios. No "Introducing" or "Try now".
+
+Input clusters:
+{clusters_text}
+
+JSON:"""
+
+
+def _generate_validation_kit(go_clusters: list, cfg: dict) -> dict:
+    """为 GO 候选生成验证物料（landing page + 广告文案）。返回 {cluster_id: kit_dict}。"""
+    if not go_clusters:
+        return {}
+
+    def _sanitize(text: str) -> str:
+        """去掉可能干扰 LLM 的特殊字符"""
+        text = re.sub(r'[{}]', '', text)
+        text = text.replace('"', "'").replace('\\', '/')
+        return text[:200]
+
+    clusters_text = ""
+    for i, c in enumerate(go_clusters[:5]):  # 最多 5 个，避免 prompt 过长
+        quotes_str = " | ".join(_sanitize(q) for q in c.get("top_quotes", [])[:2])
+        role = _sanitize(c.get("top_role", "unknown"))
+        summary = _sanitize(c['summary'])
+        clusters_text += (
+            f"\n--- cluster {i} ---"
+            f"\nsummary: {summary}"
+            f"\nuser_role: {role}"
+            f"\npain: {c['avg_pain']:.1f}/5 | pay_ratio: {c['pay_ratio']:.0%}"
+            f"\nquotes: {quotes_str}"
+        )
+
+    prompt = VALIDATION_KIT_PROMPT.format(n=min(len(go_clusters), 5), clusters_text=clusters_text)
+
+    try:
+        provider_type, client, p_cfg = _make_llm_client(cfg)
+        resp_text, _, _ = _llm_call(provider_type, client, p_cfg, prompt, cfg.get("llm", {}).get("max_tokens_per_call", 3500))
+        # 尝试解析 JSON 数组或 {"kits": [...]} 格式
+        match = re.search(r'\[[\s\S]*\]', resp_text)
+        if not match:
+            match = re.search(r'\{[\s\S]*"kits"[\s\S]*\}', resp_text)
+        if match:
+            parsed = json.loads(match.group())
+            kits_list = parsed if isinstance(parsed, list) else parsed.get("kits", [])
+            result = {}
+            for kit in kits_list:
+                cid = kit.get("cluster_id", -1)
+                if 0 <= cid < len(go_clusters):
+                    result[cid] = kit
+            return result
+    except Exception as e:
+        log.warning(f"验证物料生成失败: {e}")
+        log.debug(f"验证物料 prompt 前 500 字: {prompt[:500]}")
+    return {}
+
+
 def _ddg_search_count(query: str, max_results: int = 5) -> Tuple[int, List[dict]]:
     """用 DDG 搜索，返回 (估算结果数, 前N条结果列表)。"""
     try:
@@ -1064,7 +1186,7 @@ def estimate_tam(cluster_summary: str, user_roles: List[str]) -> dict:
     Returns:
         {
             "tam_score": int,        # 1-10 分 (10=巨大市场)
-            "search_volume": str,    # "high" / "medium" / "low"
+            "search_volume": str,    # "high" / "medium" / "low" / "unvalidated"
             "evidence": str,         # 估算依据
         }
     """
@@ -1072,15 +1194,23 @@ def estimate_tam(cluster_summary: str, user_roles: List[str]) -> dict:
 
     base = cluster_summary[:60].strip()
 
-    # 用 DDG 搜索结果数作为市场关注度代理指标
+    # 多轮搜索降级：精确匹配 → 去引号 → 缩短 → 加 site:reddit.com
     queries = [
-        f'"{base}"',  # 精确匹配，看有多少人讨论这个话题
+        f'"{base}"',
+        base,
+        " ".join(base.split()[:5]),
+        f'site:reddit.com {base}',
     ]
 
-    result_count, results = _ddg_search_count(queries[0], max_results=10)
-    time.sleep(1)
+    result_count = 0
+    used_query = queries[0]
+    for q in queries:
+        result_count, _ = _ddg_search_count(q, max_results=10)
+        if result_count > 0:
+            used_query = q
+            break
+        time.sleep(1)
 
-    # 从搜索结果里提取信号
     # 结果多 = 市场关注度高
     if result_count >= 8:
         volume = "high"
@@ -1092,7 +1222,7 @@ def estimate_tam(cluster_summary: str, user_roles: List[str]) -> dict:
         volume = "low"
         tam = 3
     else:
-        volume = "none"
+        volume = "unvalidated"
         tam = 1
 
     # 有专业角色（lawyer, developer 等）加分，说明是专业市场
@@ -1228,6 +1358,17 @@ def gen_weekly_report(conn: sqlite3.Connection, report_dir: str,
     for row, label in zip(rows, labels):
         clusters[label].append(row)
 
+    # LLM 批量生成聚类摘要（比取最短 task 更精准）
+    llm_summaries = {}
+    if cfg_for_clustering and len(clusters) <= 50:
+        cluster_tasks_for_summary = {
+            label: [s[1] for s in sigs if s[1]]
+            for label, sigs in clusters.items()
+        }
+        llm_summaries = _generate_cluster_summaries(cluster_tasks_for_summary, cfg_for_clustering)
+        if llm_summaries:
+            log.info(f"LLM 为 {len(llm_summaries)} 个 cluster 生成了摘要")
+
     # 计算每个 cluster 的统计 + 初步分数
     cluster_summaries = []
     for label, sigs in clusters.items():
@@ -1240,8 +1381,8 @@ def gen_weekly_report(conn: sqlite3.Connection, report_dir: str,
         ai_ratio = (ai_yes + 0.5 * ai_partial) / cnt
         score = _score_cluster(cnt, avg_pain, pay_ratio, ai_ratio)
 
-        # cluster summary: 用最短的 task 描述（通常最泛化）
-        summary_task = min((s[1] for s in sigs), key=lambda t: len(t or ""))
+        # cluster summary: 优先用 LLM 生成的摘要，回退到最短 task
+        summary_task = llm_summaries.get(label) or min((s[1] for s in sigs), key=lambda t: len(t or ""))
 
         # 用户身份 top 3
         roles = defaultdict(int)
@@ -1325,7 +1466,7 @@ def gen_weekly_report(conn: sqlite3.Connection, report_dir: str,
     lines = [
         f"# Web 出海周报 {today}",
         "",
-        f"> v0.4 自动验证版（聚类 + 竞品扫描 + TAM 估算 + GO/MAYBE/SKIP）",
+        f"> v0.5 自动验证版（聚类 + 竞品扫描 + TAM 估算 + GO/MAYBE/SKIP + 验证物料）",
         f"> 总信号: {len(rows)} | 聚类数: {len(clusters)} | 展示 Top {top_n}",
         f"> 结论分布: GO={verdict_counts.get('GO',0)} MAYBE={verdict_counts.get('MAYBE',0)} SKIP={verdict_counts.get('SKIP',0)}",
         "",
@@ -1351,6 +1492,51 @@ def gen_weekly_report(conn: sqlite3.Connection, report_dir: str,
         for u in c["urls"]:
             lines.append(f"  - {u}")
         lines.append("")
+
+    # ---------- GO 候选验证物料生成 ----------
+    go_clusters_data = []
+    for i, c in enumerate(cluster_summaries[:top_n]):
+        if c["verdict"] == "GO":
+            top_quotes = [s[8][:150] for s in list(clusters.values())[i][:3] if s[8]]
+            go_clusters_data.append({
+                "summary": c["summary"],
+                "avg_pain": c["avg_pain"],
+                "pay_ratio": c["pay_ratio"],
+                "top_quotes": top_quotes,
+                "top_role": c["roles"][0][0] if c["roles"] else "unknown",
+            })
+
+    if go_clusters_data and cfg_for_clustering:
+        log.info(f"为 {len(go_clusters_data)} 个 GO 候选生成验证物料...")
+        kits = _generate_validation_kit(go_clusters_data, cfg_for_clustering)
+        if kits:
+            lines.append("---")
+            lines.append("## 验证物料（GO 候选自动生成）")
+            lines.append("")
+            for idx, kit in kits.items():
+                if idx < len(go_clusters_data):
+                    summary = go_clusters_data[idx]["summary"]
+                    lines.append(f"### {summary}")
+                    lines.append("")
+                    lp = kit.get("landing_page", {})
+                    if lp:
+                        lines.append("**Landing Page Hero Copy:**")
+                        lines.append(f"- A (痛点驱动): {lp.get('variant_a', '-')}")
+                        lines.append(f"- B (方案驱动): {lp.get('variant_b', '-')}")
+                        lines.append(f"- C (身份驱动): {lp.get('variant_c', '-')}")
+                        lines.append("")
+                    ga = kit.get("google_ads", {})
+                    if ga:
+                        lines.append("**Google Ads:**")
+                        for j, t in enumerate(ga.get("titles", []), 1):
+                            lines.append(f"- 标题{j}: {t}")
+                        for j, d in enumerate(ga.get("descriptions", []), 1):
+                            lines.append(f"- 描述{j}: {d}")
+                        lines.append("")
+                    ra = kit.get("reddit_ad", "")
+                    if ra:
+                        lines.append(f"**Reddit Ad:** {ra}")
+                        lines.append("")
 
     # 尾部统计
     lines.append("---")
