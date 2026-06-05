@@ -153,12 +153,12 @@ async def run_pipeline(
         run_request.config_override or pipeline.config_json,
         pipeline_run.id
     )
-    
+
     pipeline_run.task_id = task.id
     pipeline.last_run_at = datetime.utcnow()
-    
+
     await db.flush()
-    
+
     return TaskResponse(
         task_id=task.id,
         pipeline_run_id=pipeline_run.id,

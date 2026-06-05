@@ -77,13 +77,13 @@ def check_celery_config() -> Tuple[bool, str]:
 
 def main():
     print("Starting saas-service startup validation...\n")
-    
+
     checks = []
-    
+
     # 1. Python version
     ok, msg = check_python_version()
     checks.append(("Python 3.12+", ok, msg))
-    
+
     # 2. Key dependencies
     deps = [
         "fastapi",
@@ -98,7 +98,7 @@ def main():
     for dep in deps:
         ok, msg = check_dependency(dep)
         checks.append((dep, ok, msg))
-    
+
     # 3. Module imports
     modules = [
         "app.main",
@@ -118,19 +118,19 @@ def main():
     for mod in modules:
         ok, msg = check_module_import(mod)
         checks.append((f"{mod} import", ok, msg))
-    
+
     # 4. Config load
     ok, msg = check_config_load()
     checks.append(("app.config.Settings load", ok, msg))
-    
+
     # 5. Database config (no connection)
     ok, msg = check_database_config()
     checks.append(("Database config", ok, msg))
-    
+
     # 6. Celery config (no worker)
     ok, msg = check_celery_config()
     checks.append(("Celery config", ok, msg))
-    
+
     # Print results
     passed = 0
     failed = 0
@@ -141,9 +141,9 @@ def main():
             passed += 1
         else:
             failed += 1
-    
+
     print(f"\n[SUMMARY] {passed} checks passed, {failed} checks failed.")
-    
+
     if failed > 0:
         sys.exit(1)
     sys.exit(0)

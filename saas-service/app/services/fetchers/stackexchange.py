@@ -85,7 +85,6 @@ def fetch_stackexchange(cfg: dict, vertical_name: str = "") -> List[FetchResult]
                                 continue
                             title = q.get("title") or ""
                             body = _strip_html(q.get("body") or "")
-                            # 包含痛点关键词 OR 已经是 high-score 帖
                             combined = title + "\n\n" + body
                             if not pain_pat.search(combined) and (q.get("score") or 0) < 10:
                                 continue

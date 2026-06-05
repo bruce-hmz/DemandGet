@@ -13,7 +13,6 @@ log = logging.getLogger("chuhai.fetchers.reddit")
 REDDIT_BASE = "https://www.reddit.com"
 
 REDDIT_HEADERS = {
-    # 伪装 UA，免得直接 429，识别自己做爬虫没关系。
     "User-Agent": "web-chuhai-agent/0.1 (+demand-discovery research)",
     "Accept": "application/json",
 }
@@ -43,7 +42,7 @@ def fetch_reddit(cfg: dict, vertical_name: str = "") -> List[FetchResult]:
     """
     从 reddit.com/.json 端点抓取帖子和评论。
     不需 API key、不需登陆、不需 PRAW。
-    失败时见 SOP §4.1 备用方案。
+    失败时见 SOP 4.1 备用方案。
     """
     pain_pat = re.compile(
         "|".join(re.escape(k) for k in cfg["pain_keywords"]),

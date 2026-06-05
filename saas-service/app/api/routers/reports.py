@@ -41,7 +41,7 @@ async def list_reports(
     if pipeline_id:
         stmt = stmt.where(PipelineRun.pipeline_id == pipeline_id)
     stmt = stmt.order_by(PipelineRun.started_at.desc())
-    
+
     result = await db.execute(stmt)
     runs = result.scalars().all()
     return runs
@@ -129,7 +129,7 @@ async def export_report(
 ):
     """Export report in JSON, CSV, or Markdown format."""
     from app.models.pipeline import Pipeline
-    
+
     run_stmt = (
         select(PipelineRun)
         .join(PipelineRun.pipeline)
@@ -179,7 +179,7 @@ async def export_report(
         writer.writerow(["id", "source_channel", "source_url", "raw_quote"])
         for signal in signals:
             writer.writerow([signal.id, signal.source_channel, signal.source_url, signal.raw_quote])
-        
+
         output.seek(0)
         return StreamingResponse(
             iter([output.getvalue()]),
@@ -191,7 +191,7 @@ async def export_report(
         md_lines = [f"# Report {run_id}", "", "## Signals", ""]
         for signal in signals:
             md_lines.append(f"- {signal.source_channel}: {signal.raw_quote[:100]}...")
-        
+
         return Response(
             content="\n".join(md_lines),
             media_type="text/markdown",

@@ -128,7 +128,7 @@ async def get_experiment_stats(
         func.avg(Experiment.ctr).label("avg_ctr"),
         func.avg(Experiment.conversion_rate).label("avg_conversion"),
     ).where(Experiment.tenant_id == current_user.tenant_id)
-    
+
     result = await db.execute(stmt)
     row = result.one()
 

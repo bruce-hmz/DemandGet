@@ -109,15 +109,11 @@ def fetch_hn(cfg: dict) -> List[Dict[str, Any]]:
                             except Exception:
                                 pass
 
-                        # Extract user_role, pain_category, etc. from the body? 
-                        # In the original code, these are not fetched from HN, so we set defaults.
-                        # The extractor will fill them later? Actually, the extractor in the current celery_app.py
-                        # expects these fields in the doc. We will set them to None or default.
                         doc = {
                             "channel": "hn",
                             "url": full_url,
                             "content": body[:1000],  # limit content length
-                            "user_role": None,  # to be filled by extractor?
+                            "user_role": None,
                             "pain_category": None,
                             "pain_intensity": 0,
                             "implied_task": None,

@@ -60,7 +60,7 @@ async def generate_weekly_report(
 
     # 3. 生成 Markdown
     lines = [f"# Web 出海周报 {today}\n\n"]
-    
+
     # 总览
     lines.append(f"## 总览\n\n")
     lines.append(f"- 信号数量: {len(signals)}\n")

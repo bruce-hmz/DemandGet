@@ -30,7 +30,7 @@ DDG_SITE_TEMPLATES = [
 
 def fetch_ddg(cfg: dict, vertical_name: str = "") -> List[FetchResult]:
     """
-    DuckDuckGo 反查：通过 `ddgs` 库免费拿 Reddit/Quora 等被反爬站点的搜索结果 snippet。
+    DuckDuckGo 反查：通过 ddgs 库免费拿 Reddit/Quora 等被反爬站点的搜索结果 snippet。
     无需 API key，无需信用卡，无需注册。是 Brave Search 的免费替代品。
     限速约 ~50 query/min，我们加 1s sleep 保守跑。
     """

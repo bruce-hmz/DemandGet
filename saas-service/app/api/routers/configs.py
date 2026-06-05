@@ -126,7 +126,7 @@ async def create_template(
     for existing in PREDEFINED_TEMPLATES:
         if existing["id"] == template_in.name.lower().replace(" ", "_"):
             raise HTTPException(status_code=400, detail="Template with this name already exists")
-    
+
     return TemplateOut(
         id=template_in.name.lower().replace(" ", "_"),
         industry=template_in.industry,

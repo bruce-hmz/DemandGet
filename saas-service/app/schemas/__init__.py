@@ -181,7 +181,7 @@ class ExperimentBase(BaseSchema):
 
 
 class ExperimentCreate(ExperimentBase):
-    pass
+    cluster_id: int
 
 
 class ExperimentUpdate(BaseSchema):

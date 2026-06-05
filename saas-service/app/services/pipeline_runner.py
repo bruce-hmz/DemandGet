@@ -21,7 +21,7 @@ class PipelineRunner:
             "stackex": fetch_stackexchange,
             "ddg": fetch_ddg,
         }
-    
+
     async def run(self, session: AsyncSession, pipeline_run_id: int) -> Dict[str, Any]:
         """执行完整 pipeline，返回执行摘要"""
         # 1. 获取 pipeline run 并验证租户
@@ -30,9 +30,9 @@ class PipelineRunner:
         pipeline_run = result.scalar_one_or_none()
         if not pipeline_run:
             raise ValueError(f"Pipeline run {pipeline_run_id} not found")
-        
+
         # TODO: 验证 tenant_id 匹配（可选）
-        
+
         # 2. 根据 config.channels 选择 fetcher
         fetcher_map = {
             "hn": fetch_hn,
@@ -46,14 +46,14 @@ class PipelineRunner:
             if fetcher:
                 docs = fetcher(self.cfg)
                 all_docs.extend(docs)
-        
+
         # 3. extract_signals
         signals = extract_signals(all_docs)
-        
+
         # 4. cluster + score
         clusters = cluster_signals_llm(signals, self.cfg)
         ranked_clusters = rank_clusters(clusters)
-        
+
         # 5. 持久化 signals 和 clusters
         # 保存 signals
         for sig in signals:
@@ -72,7 +72,7 @@ class PipelineRunner:
             )
             session.add(signal_obj)
         await session.flush()
-        
+
         # 保存 clusters
         for cluster_data in ranked_clusters:
             cluster_obj = Cluster(
@@ -88,10 +88,10 @@ class PipelineRunner:
             )
             session.add(cluster_obj)
         await session.flush()
-        
+
         # TODO: 关联 signal 和 cluster (需要在 cluster_data 中包含 signal_ids)
         # 为了简单，这里省略，但实际应用中需要根据聚类结果设置 signal.cluster_id
-        
+
         return {
             "status": "completed",
             "pipeline_run_id": pipeline_run_id,

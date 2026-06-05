@@ -153,7 +153,7 @@ async def refresh_token(
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(refresh_token, db)
-    
+
     access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
     access_token = create_access_token(
         data={"sub": str(user.id), "tenant_id": user.tenant_id},
@@ -162,7 +162,7 @@ async def refresh_token(
     new_refresh_token = create_refresh_token(
         data={"sub": str(user.id), "tenant_id": user.tenant_id},
     )
-    
+
     return TokenResponse(
         access_token=access_token,
         refresh_token=new_refresh_token,

@@ -40,7 +40,7 @@ celery_app.conf.beat_schedule = {
 
 @celery_app.task(bind=True, name="app.workers.celery_app.run_pipeline_task")
 def run_pipeline_task(self, pipeline_id: int, config: dict, run_id: int | None = None):
-    """完整 pipeline：fetch → extract → cluster → score → report"""
+    """完整 pipeline：fetch -> extract -> cluster -> score -> report"""
     async def _execute():
         from app.database import AsyncSessionLocal
         from app.models.pipeline import Pipeline, PipelineRun
@@ -51,7 +51,7 @@ def run_pipeline_task(self, pipeline_id: int, config: dict, run_id: int | None =
         from app.services.extractors.signal_extractor import extract_signals
         from app.services.scorers.clusterer import cluster_signals_llm
         from app.services.scorers.ranker import rank_clusters
-        
+
         # 1. 更新 run 状态为 running
         current_tenant_id = 0
         if run_id:
@@ -81,24 +81,22 @@ def run_pipeline_task(self, pipeline_id: int, config: dict, run_id: int | None =
             if fetcher:
                 docs = fetcher(config)
                 all_docs.extend(docs)
-        
-        # 3. 合并所有 docs (already done)
-        
-        # 4. extract_signals
+
+        # 3. extract_signals
         signals = extract_signals(all_docs)
-        
-        # 5. cluster + score
+
+        # 4. cluster + score
         clusters = cluster_signals_llm(signals, config)
         ranked_clusters = rank_clusters(clusters)
-        
-        # 6. 入库 signals + clusters
+
+        # 5. 入库 signals + clusters
         if run_id:
             from app.services.storers.signal_store import save_signals as _save_signals
             from app.services.storers.cluster_store import save_clusters as _save_clusters
             async with AsyncSessionLocal() as session:
                 # 保存 signals（去重）
                 signal_count = await _save_signals(session, signals, current_tenant_id, run_id)
-                
+
                 # 构建 implied_task -> signal.id 映射（用于关联 cluster）
                 implied_task_map = {}
                 for sig in signals:
@@ -114,11 +112,11 @@ def run_pipeline_task(self, pipeline_id: int, config: dict, run_id: int | None =
                         db_sig = res.scalar_one_or_none()
                         if db_sig:
                             implied_task_map[sig.implied_task] = db_sig.id
-                
+
                 # 保存 clusters 并回写 signal.cluster_id
                 await _save_clusters(session, ranked_clusters, current_tenant_id, run_id, implied_task_map)
-        
-        # 7. 更新 run 状态为 completed
+
+        # 6. 更新 run 状态为 completed
         if run_id:
             async with AsyncSessionLocal() as session:
                 stmt = select(PipelineRun).where(PipelineRun.id == run_id)
@@ -128,7 +126,7 @@ def run_pipeline_task(self, pipeline_id: int, config: dict, run_id: int | None =
                     run.status = "completed"
                     run.ended_at = datetime.utcnow()
                     await session.flush()
-        
+
         return {
             "status": "completed",
             "pipeline_id": pipeline_id,
@@ -136,7 +134,7 @@ def run_pipeline_task(self, pipeline_id: int, config: dict, run_id: int | None =
             "signals_count": len(signals),
             "clusters_count": len(ranked_clusters),
         }
-    
+
     try:
         return asyncio.run(_execute())
     except Exception as exc:
